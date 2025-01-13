@@ -12,6 +12,7 @@ logging.basicConfig(level=logging.INFO)
 
 firewall_keepalive_url = None
 
+
 def login(username, password):
     check_url = "http://networkcheck.kde.org/"
     r = requests.get(check_url)
@@ -21,17 +22,17 @@ def login(username, password):
         magic = firewall_login_url[r.url.find('?')+1:]
         firewall_host = r.url[:r.url.rfind('/')]
         headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Origin" : firewall_host,
-                "Referer": firewall_login_url
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": firewall_host,
+            "Referer": firewall_login_url
         }
         data = {
-                "4Tredir": check_url,
-                "magic" : magic,
-                "username": username,
-                "password": password,
+            "4Tredir": check_url,
+            "magic": magic,
+            "username": username,
+            "password": password,
         }
-        r1 = requests.post(firewall_host+'/', data=data)
+        r1 = requests.post(firewall_host + '/', data=data)
         if r1.url == firewall_host + '/':
             logger.error("firewall authentication failed")
             return 1
@@ -52,6 +53,7 @@ def login(username, password):
     logger.info("no login; internet already accessible")
     return 0
 
+
 def handle_kill(signum, frame):
     logging.error("received signal " + str(signum))
     try:
@@ -60,23 +62,25 @@ def handle_kill(signum, frame):
             logging.info("successfully logged out")
         else:
             logging.error("error logging out")
-            exit(2)
     except Exception as e:
         logging.error(e)
-    exit(1)
+    sys.exit(1)
 
-def keepalive(keepalive_url):
+
+def keepalive_loop(keepalive_url):
     while True:
-        time.sleep(10*60)
         try:
             r = requests.get(keepalive_url)
-            if r.status_code != 200:
+            if r.status_code == 200:
+                logging.info("successfully refreshed keepalive")
+            else:
                 logging.error("error refreshing keepalive")
-                exit(1)
-            logging.info("succesfully refreshed keepalive")
+                sys.exit(1)
         except Exception as e:
-            logging.erro(e)
-            exit(1)
+            logging.error(e)
+            sys.exit(1)
+        time.sleep(10 * 60)  # Refresh every 10 minutes
+
 
 def get_config_file_loc():
     try:
@@ -87,67 +91,12 @@ def get_config_file_loc():
     config_file_loc = config_file_dir + 'nitc-fwd-config.json'
     return config_file_loc
 
+
 def main():
     signal.signal(signal.SIGINT, handle_kill)
     signal.signal(signal.SIGTERM, handle_kill)
     config_file_loc = get_config_file_loc()
-    daemon = True
     global firewall_keepalive_url
-
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "login":
-            daemon = False
-        elif sys.argv[1] == "logout":
-            try:
-                with open(config_file_loc, "r") as f:
-                    config = json.load(f)
-            except FileNotFoundError:
-                logging.error("no config file found!")
-                exit(1)
-            if "keepalive" in config.keys():
-                firewall_keepalive_url = config["keepalive"]
-                logout_url = firewall_keepalive_url.replace("keepalive", "logout")
-                try:
-                    r = requests.get(logout_url)
-                    if r.status_code == 200:
-                        logging.info("successfully logged out")
-                        exit(0)
-                    else:
-                        logging.error("error logging out")
-                        exit(2)
-                except Exception as e:
-                    logging.error(e)
-            else:
-                logging.error("no keepalive found; seems like you didn't use nitc-fwd to login")
-                exit(1)
-
-        elif sys.argv[1] == "refresh":
-            try:
-                with open(config_file_loc, "r") as f:
-                    config = json.load(f)
-            except FileNotFoundError:
-                logging.error("no config file found!")
-                exit(1)
-            if "keepalive" in config.keys():
-                firewall_keepalive_url = config["keepalive"]
-                try:
-                    r = requests.get(firewall_keepalive_url)
-                    if r.status_code == 200:
-                        logging.info("succesfully refreshed keepalive")
-                        exit(0)
-                    else:
-                        logging.error("error refreshing keepalive")
-                        exit(2)
-                except Exception as e:
-                    logging.error(e)
-            else:
-                logging.error("no keepalive found; seems like you didn't use nitc-fwd to login")
-                exit(1)
-
-        else:
-            logging.error("unknown command: " + sys.argv[1])
-            logging.info("Usage: " + sys.argv[0] + " [login|logout|refresh]")
-            exit(1)
 
     try:
         with open(config_file_loc, "r") as f:
@@ -164,28 +113,25 @@ def main():
         firewall_keepalive_url = config["keepalive"]
         logger.info("loaded existing keepalive url from config")
         try:
-            logger.info("using old keepalive, " + firewall_keepalive_url, timeout=3)
-            requests.get(firewall_keepalive_url)
-            keepalive(firewall_keepalive_url)
-        except Exception as e:
-            logging.error("failed not use old keepalive, re-logging in")
+            requests.get(firewall_keepalive_url, timeout=3)
+            logger.info("using existing keepalive")
+        except Exception:
+            logger.error("failed to use old keepalive, re-logging in")
             username = config["username"]
             password = config["password"]
-            
             firewall_keepalive_url = login(username, password)
             if type(firewall_keepalive_url) == int:
-                return firewall_keepalive_url
-            elif daemon:
-                keepalive(firewall_keepalive_url)
+                sys.exit(firewall_keepalive_url)
     else:
         username = config["username"]
         password = config["password"]
-        
         firewall_keepalive_url = login(username, password)
         if type(firewall_keepalive_url) == int:
-            return firewall_keepalive_url
-        elif daemon:
-            keepalive(firewall_keepalive_url)
+            sys.exit(firewall_keepalive_url)
+
+    # Start infinite keepalive loop
+    keepalive_loop(firewall_keepalive_url)
+
 
 if __name__ == '__main__':
     main()
